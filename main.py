@@ -27,18 +27,15 @@ CURRENT_WEATHER_TEMPLATE = """
     html, body {
       margin: 0;
       padding: 0;
-      width: 1280px; /* 确保匹配 render 预设的图片尺寸 */
-      height: 720px;
+      width: 800px;
       background-color: #fff;
     }
     .weather-container {
       width: 100%;
-      height: 100%;
-      padding: 8px;
+      padding: 32px 8px;
       display: flex;
       flex-direction: column;
-      justify-content: center; /* 垂直居中 */
-      align-items: center; /* 水平居中 */
+      align-items: center;
       background-color: #ffffff;
       color: #333;
       font-family: sans-serif;
@@ -75,7 +72,7 @@ CURRENT_WEATHER_TEMPLATE = """
       <strong>天气:</strong> {{ desc }}
     </div>
     <div class="weather-info">
-      <strong>温度:</strong> {{ temp }}℃ (体感: {{ feels_like }}℃)
+      <strong>温度:</strong> {{ temp }}℃
     </div>
     <div class="weather-info">
       <strong>湿度:</strong> {{ humidity }}%
@@ -85,7 +82,7 @@ CURRENT_WEATHER_TEMPLATE = """
     </div>
     
     <div class="source-info">
-      数据来源: 心知天气（Seniverse） 免费API
+      数据来源: 高德开放平台（Amap） 免费API
     </div>
   </div>
 </body>
@@ -100,17 +97,14 @@ FORECAST_TEMPLATE = """
     html, body {
       margin: 0;
       padding: 0;
-      width: 1280px;
-      height: 720px;
+      width: 800px;
       background-color: #fff;
     }
     .forecast-container {
       width: 100%;
-      height: 100%;
-      padding: 8px;
+      padding: 32px 8px;
       display: flex;
       flex-direction: column;
-      justify-content: center;
       align-items: center;
       background-color: #fff;
       color: #333;
