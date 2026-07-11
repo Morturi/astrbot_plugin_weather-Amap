@@ -51,6 +51,7 @@ CURRENT_WEATHER_TEMPLATE = """
     }
     .weather-info {
       margin-bottom: 10px;
+      text-align: center;
     }
     .source-info {
       border-top: 1px solid #ddd;
@@ -58,6 +59,7 @@ CURRENT_WEATHER_TEMPLATE = """
       padding-top: 12px;
       font-size: 16px;
       color: #999;
+      text-align: center;
     }
   </style>
 </head>
@@ -121,11 +123,13 @@ FORECAST_TEMPLATE = """
     }
     .city-info {
       margin-bottom: 8px;
+      text-align: center;
     }
     .day-item {
       margin-bottom: 8px;
       border-bottom: 1px solid #eee;
       padding-bottom: 4px;
+      text-align: center;
     }
     .day-title {
       font-weight: bold;
@@ -138,6 +142,7 @@ FORECAST_TEMPLATE = """
       margin-top: 12px;
       border-top: 1px solid #ddd;
       padding-top: 8px;
+      text-align: center;
     }
   </style>
 </head>
