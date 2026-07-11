@@ -1,14 +1,18 @@
 import aiohttp
+import asyncio
 import datetime
 from typing import Optional, List, Dict
 import traceback
+from zoneinfo import ZoneInfo
+
+from croniter import croniter
 
 from astrbot.api.all import (
     Star, Context, register,
     AstrMessageEvent, command_group, command,
     MessageEventResult, llm_tool
 )
-from astrbot.api.event import filter
+from astrbot.api.event import filter, MessageChain
 from astrbot.api import logger
 
 # ==============================
@@ -184,11 +188,10 @@ class WeatherPlugin(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         self.config = config
-        # 使用配置中的 amap_api_key
         self.api_key = config.get("amap_api_key", "")
         self.default_city = config.get("default_city", "北京")
-        # 新增配置项：send_mode，控制发送模式 "image" 或 "text"
         self.send_mode = config.get("send_mode", "image")
+        self._scheduler_task: Optional[asyncio.Task] = None
         logger.debug(f"WeatherPlugin initialized with API key: {self.api_key}, default_city: {self.default_city}, send_mode: {self.send_mode}")
 
     # =============================
@@ -288,9 +291,153 @@ class WeatherPlugin(Star):
             "=== 高德开放平台插件命令列表 ===\n"
             "/weather current <城市>  查看当前实况\n"
             "/weather forecast <城市> 查看未来4天天气预报\n"
+            "/weather subscribe       订阅定时天气推送\n"
+            "/weather unsubscribe     取消订阅定时天气推送\n"
             "/weather help            显示本帮助\n"
         )
         yield event.plain_result(msg)
+
+    @weather_group.command("subscribe")
+    async def weather_subscribe(self, event: AstrMessageEvent):
+        """
+        订阅定时天气推送到当前会话
+        用法: /weather subscribe
+        """
+        umo = event.unified_msg_origin
+        subscriptions: list = self.config.get("subscriptions", [])
+        if umo in subscriptions:
+            yield event.plain_result("当前会话已订阅定时天气推送。")
+            return
+        subscriptions.append(umo)
+        self.config["subscriptions"] = subscriptions
+        self.config.save_config()
+        logger.info(f"Weather subscription added: {umo}")
+        yield event.plain_result("订阅成功！将按照配置的 Cron 计划定时推送天气信息到当前会话。")
+
+    @weather_group.command("unsubscribe")
+    async def weather_unsubscribe(self, event: AstrMessageEvent):
+        """
+        取消订阅定时天气推送
+        用法: /weather unsubscribe
+        """
+        umo = event.unified_msg_origin
+        subscriptions: list = self.config.get("subscriptions", [])
+        if umo not in subscriptions:
+            yield event.plain_result("当前会话未订阅定时天气推送。")
+            return
+        subscriptions.remove(umo)
+        self.config["subscriptions"] = subscriptions
+        self.config.save_config()
+        logger.info(f"Weather subscription removed: {umo}")
+        yield event.plain_result("已取消订阅定时天气推送。")
+
+    # =============================
+    # 定时调度
+    # =============================
+    @filter.on_astrbot_loaded()
+    async def on_loaded(self):
+        self._scheduler_task = asyncio.create_task(self._cron_scheduler())
+        logger.info("Weather cron scheduler started.")
+
+    async def _cron_scheduler(self):
+        try:
+            while True:
+                await asyncio.sleep(30)
+                await self._check_and_send()
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"Cron scheduler error: {e}")
+            logger.error(traceback.format_exc())
+
+    async def _check_and_send(self):
+        cron_text = self.config.get("cron_schedules", "")
+        subscriptions = self.config.get("subscriptions", [])
+        if not cron_text or not subscriptions:
+            return
+
+        tz_name = self.config.get("timezone", "Asia/Shanghai")
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            logger.error(f"Invalid timezone: {tz_name}, falling back to Asia/Shanghai")
+            tz = ZoneInfo("Asia/Shanghai")
+
+        now = datetime.datetime.now(tz)
+        should_send = False
+        for line in cron_text.strip().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            try:
+                cron = croniter(line, now - datetime.timedelta(seconds=60), hash_id="weather")
+                next_time = cron.get_next(datetime.datetime)
+                if next_time.tzinfo is None:
+                    next_time = next_time.replace(tzinfo=tz)
+                if abs((next_time - now).total_seconds()) < 30:
+                    should_send = True
+                    break
+            except Exception as e:
+                logger.warning(f"Invalid cron expression '{line}': {e}")
+
+        if not should_send:
+            return
+
+        cities_text = self.config.get("scheduled_cities", "")
+        cities = [c.strip() for c in cities_text.strip().splitlines() if c.strip()] if cities_text else []
+        if not cities:
+            cities = [self.config.get("default_city", "北京")]
+
+        weather_type = self.config.get("weather_type", "current")
+
+        for city in cities:
+            try:
+                if weather_type == "forecast":
+                    text = await self._build_forecast_text(city)
+                else:
+                    text = await self._build_current_text(city)
+                if not text:
+                    continue
+                for umo in subscriptions:
+                    try:
+                        chain = MessageChain().message(text)
+                        await self.context.send_message(umo, chain)
+                    except Exception as e:
+                        logger.error(f"Failed to send scheduled weather to {umo}: {e}")
+            except Exception as e:
+                logger.error(f"Failed to build weather for {city}: {e}")
+
+    async def _build_current_text(self, city: str) -> Optional[str]:
+        data = await self.get_current_weather_by_city(city)
+        if not data:
+            return None
+        return (
+            f"【定时天气播报】\n"
+            f"城市: {data['city']}\n"
+            f"天气: {data['desc']}\n"
+            f"温度: {data['temp']}℃\n"
+            f"湿度: {data['humidity']}%\n"
+            f"风速: {data['wind_speed']} km/h"
+        )
+
+    async def _build_forecast_text(self, city: str) -> Optional[str]:
+        forecast_data = await self.get_forecast_weather_by_city(city)
+        if not forecast_data:
+            return None
+        text = f"【定时天气播报】\n未来{len(forecast_data)}天天气预报\n城市: {city}\n"
+        for day in forecast_data:
+            text += (
+                f"{day['date']}: 白天: {day['text_day']} - {day['high']}℃, "
+                f"夜晚: {day['text_night']} - {day['low']}℃, "
+                f"湿度: {day['humidity']}%, "
+                f"风速: {day['wind_speed']} km/h\n"
+            )
+        return text
+
+    async def terminate(self):
+        if self._scheduler_task and not self._scheduler_task.done():
+            self._scheduler_task.cancel()
+            logger.info("Weather cron scheduler stopped.")
 
     # =============================
     # LLM Function-Calling (可选)
